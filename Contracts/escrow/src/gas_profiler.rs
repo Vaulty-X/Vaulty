@@ -3,7 +3,7 @@
 //! Provides utilities for tracking gas costs and estimating transaction expenses.
 //! Minimizes on-chain profiling overhead by using sampled measurements.
 
-use soroban_sdk::{Env, Symbol, symbol_short};
+use soroban_sdk::Env;
 
 /// Gas cost constants (in stroops, 1 stroop = 0.00001 lumens)
 /// These are empirically measured baseline costs on Soroban testnet

@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, Symbol, Vec};
 
 mod errors;
@@ -7,7 +10,7 @@ mod escrow;
 mod events;
 mod rbac;
 mod repayment;
-mod storage;
+pub mod storage;
 mod voucher;
 
 // Gas optimization modules
@@ -17,28 +20,59 @@ mod batch_ops;
 mod gas_estimation;
 
 use errors::Error;
-use storage::{ContractAbi, DataKey, EscrowRecord, PermissionLevel, RepaymentEntry, Role};
+use storage::{ContractAbi, DataKey, EscrowRecord, RepaymentEntry, Role};
 
 #[contract]
 pub struct EscrowContract;
+
+fn require_admin_auth(env: &Env) -> Result<Address, Error> {
+    let admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::Unauthorized)?;
+    admin.require_auth();
+    rbac::RBAC::require_admin(env, &admin)?;
+    Ok(admin)
+}
+
+fn require_oracle_auth(env: &Env) -> Result<Address, Error> {
+    let oracle: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Oracle)
+        .ok_or(Error::Unauthorized)?;
+    oracle.require_auth();
+    rbac::RBAC::require_oracle(env, &oracle)?;
+    Ok(oracle)
+}
 
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with admin and oracle addresses.
     pub fn initialize(env: Env, admin: Address, oracle: Address) {
+        let ttl = storage::REPAYMENT_WINDOW_LEDGERS + storage::APPROVAL_TIMEOUT_LEDGERS + 10_000;
+
         // Set up initial roles
         env.storage()
             .persistent()
             .set(&DataKey::UserRole(admin.clone()), &Role::Admin);
         env.storage()
             .persistent()
+            .extend_ttl(&DataKey::UserRole(admin.clone()), ttl, ttl);
+        env.storage()
+            .persistent()
             .set(&DataKey::UserRole(oracle.clone()), &Role::Oracle);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::UserRole(oracle.clone()), ttl, ttl);
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Oracle, &oracle);
 
         // Initialize proposal counter
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+        env.storage().instance().extend_ttl(ttl, ttl);
 
         events::role_assigned(&env, &admin, &Role::Admin);
         events::role_assigned(&env, &oracle, &Role::Oracle);
@@ -58,8 +92,12 @@ impl EscrowContract {
         amount: i128,
     ) -> Result<BytesN<32>, Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_sender(&env, &sender)?;
-        sender.require_auth();
+        if rbac::RBAC::get_user_role(&env, &sender).is_none() {
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserRole(sender.clone()), &Role::Sender);
+            events::role_assigned(&env, &sender, &Role::Sender);
+        }
         escrow::fund(&env, &usdc_token, &sender, vendor_id, crop_season, amount)
     }
 
@@ -70,7 +108,11 @@ impl EscrowContract {
         farmer: Address,
     ) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
+        require_admin_auth(&env)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserRole(farmer.clone()), &Role::Farmer);
+        events::role_assigned(&env, &farmer, &Role::Farmer);
         escrow::approve_farmer(&env, escrow_id, farmer)
     }
 
@@ -83,14 +125,13 @@ impl EscrowContract {
     ) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
         rbac::RBAC::require_vendor(&env, &vendor)?;
-        vendor.require_auth();
         escrow::redeem_voucher(&env, &usdc_token, escrow_id, vendor)
     }
 
     /// Oracle triggers repayment window after harvest.
     pub fn trigger_repay(env: Env, escrow_id: BytesN<32>) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_oracle(&env, &env.invoker())?;
+        require_oracle_auth(&env)?;
         repayment::trigger_repay(&env, escrow_id)
     }
 
@@ -105,14 +146,13 @@ impl EscrowContract {
     ) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
         rbac::RBAC::require_farmer(&env, &farmer)?;
-        farmer.require_auth();
         repayment::repay(&env, &usdc_token, escrow_id, &farmer, amount)
     }
 
     /// Oracle triggers default on an overdue escrow.
     pub fn default_escrow(env: Env, escrow_id: BytesN<32>) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_oracle(&env, &env.invoker())?;
+        require_oracle_auth(&env)?;
         repayment::default_escrow(&env, escrow_id)
     }
 
@@ -156,7 +196,7 @@ impl EscrowContract {
         schema: Bytes,
     ) -> Result<u32, Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
+        require_admin_auth(&env)?;
         voucher::register_abi(&env, contract_id, schema)
     }
 
@@ -167,7 +207,7 @@ impl EscrowContract {
         schema: Bytes,
     ) -> Result<u32, Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
+        require_admin_auth(&env)?;
         voucher::update_abi(&env, contract_id, schema)
     }
 
@@ -188,17 +228,21 @@ impl EscrowContract {
     /// Approve a vendor address for voucher redemption.
     pub fn approve_vendor_address(env: Env, vendor: Address) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
+        require_admin_auth(&env)?;
         env.storage()
             .persistent()
-            .set(&DataKey::VendorAddress(vendor), &true);
+            .set(&DataKey::VendorAddress(vendor.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserRole(vendor.clone()), &Role::Vendor);
+        events::role_assigned(&env, &vendor, &Role::Vendor);
         Ok(())
     }
 
     /// Remove a vendor address approval.
     pub fn remove_vendor_address(env: Env, vendor: Address) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
+        require_admin_auth(&env)?;
         env.storage()
             .persistent()
             .set(&DataKey::VendorAddress(vendor), &false);
@@ -208,14 +252,15 @@ impl EscrowContract {
     /// Approve a vendor by ID (BytesN<32>).
     pub fn approve_vendor(env: Env, vendor_id: BytesN<32>) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
-        rbac::RBAC::approve_vendor(&env, &env.invoker(), vendor_id)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::approve_vendor(&env, &admin, vendor_id)
     }
 
     /// Admin: set new oracle address.
     pub fn set_oracle(env: Env, oracle: Address) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::set_oracle(&env, &env.invoker(), &oracle)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::set_oracle(&env, &admin, &oracle)
     }
 
     // -----------------------------------------------------------------------
@@ -225,35 +270,41 @@ impl EscrowContract {
     /// Assign a role to an address (admin only)
     pub fn assign_role(env: Env, address: Address, role: Role) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::assign_role(&env, &env.invoker(), &address, role)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::assign_role(&env, &admin, &address, role)
     }
 
     /// Revoke a role from an address (admin only)
     pub fn revoke_role(env: Env, address: Address, role: Role) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::revoke_role(&env, &env.invoker(), &address, role)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::revoke_role(&env, &admin, &address, role)
     }
 
     /// Transfer admin role with safeguards (current admin only)
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::transfer_admin(&env, &env.invoker(), &new_admin)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::transfer_admin(&env, &admin, &new_admin)
     }
 
     /// Remove vendor approval (admin only)
     pub fn remove_vendor(env: Env, vendor_id: BytesN<32>) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::remove_vendor(&env, &env.invoker(), vendor_id)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::remove_vendor(&env, &admin, vendor_id)
     }
 
     /// Pause contract (admin only)
     pub fn pause_contract(env: Env) -> Result<(), Error> {
-        rbac::RBAC::pause_contract(&env, &env.invoker())
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::pause_contract(&env, &admin)
     }
 
     /// Resume contract (admin only)
     pub fn resume_contract(env: Env) -> Result<(), Error> {
-        rbac::RBAC::resume_contract(&env, &env.invoker())
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::resume_contract(&env, &admin)
     }
 
     /// Create a multi-signature proposal for critical operations (admin only)
@@ -264,19 +315,22 @@ impl EscrowContract {
         level: storage::PermissionLevel,
     ) -> Result<BytesN<32>, Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::create_proposal(&env, &env.invoker(), operation, params, level)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::create_proposal(&env, &admin, operation, params, level)
     }
 
     /// Approve a multi-signature proposal (admin only)
     pub fn approve_proposal(env: Env, proposal_id: BytesN<32>) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::approve_proposal(&env, &env.invoker(), proposal_id)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::approve_proposal(&env, &admin, proposal_id)
     }
 
     /// Execute a multi-signature proposal if it has enough approvals (admin only)
     pub fn execute_proposal(env: Env, proposal_id: BytesN<32>) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::execute_proposal(&env, &env.invoker(), proposal_id)
+        let admin = require_admin_auth(&env)?;
+        rbac::RBAC::execute_proposal(&env, &admin, proposal_id)
     }
 
     /// Get user role
@@ -368,7 +422,7 @@ impl EscrowContract {
         max_entries: u32,
     ) -> Result<(), Error> {
         rbac::RBAC::require_not_paused(&env)?;
-        rbac::RBAC::require_admin(&env, &env.invoker())?;
+        require_admin_auth(&env)?;
         storage_optimized::prune_repayment_history(&env, &escrow_id, max_entries as usize)
     }
 

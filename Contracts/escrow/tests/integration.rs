@@ -5,8 +5,8 @@ use soroban_sdk::{
     Address, Bytes, BytesN, Env, Symbol,
 };
 
-use crate::{EscrowContract, EscrowContractClient};
-use crate::storage::{EscrowState, APPROVAL_TIMEOUT_LEDGERS, REPAYMENT_WINDOW_LEDGERS};
+use remitroot_escrow::{EscrowContract, EscrowContractClient};
+use remitroot_escrow::storage::{EscrowState, APPROVAL_TIMEOUT_LEDGERS, REPAYMENT_WINDOW_LEDGERS};
 
 // ---------------------------------------------------------------------------
 // Shared helpers

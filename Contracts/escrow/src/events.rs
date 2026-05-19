@@ -1,5 +1,7 @@
 use soroban_sdk::{Address, BytesN, Env, Symbol, symbol_short};
 
+use crate::storage;
+
 pub fn escrow_funded(env: &Env, escrow_id: &BytesN<32>, sender: &Address, amount: i128) {
     env.events().publish(
         (symbol_short!("funded"), escrow_id.clone()),

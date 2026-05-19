@@ -3,13 +3,20 @@
 //! Provides utilities for estimating operation costs and validating
 //! gas limits before execution to prevent out-of-gas failures.
 
-use soroban_sdk::Env;
+use soroban_sdk::{contracttype, Env};
+
+#[cfg(test)]
+use std::{format, string::String};
 
 use crate::errors::Error;
-use crate::gas_profiler::{gas_costs, GasLimitConfig, GasMetric};
+use crate::gas_profiler::{gas_costs, GasLimitConfig};
+#[cfg(test)]
+use crate::gas_profiler::GasMetric;
 use crate::storage::EscrowRecord;
 
 /// Gas estimation for fund operation
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct FundEstimate {
     pub base_cost: u32,
     pub per_transfer_cost: u32,
@@ -27,6 +34,8 @@ impl FundEstimate {
 }
 
 /// Gas estimation for approve farmer operation
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct ApproveEstimate {
     pub base_cost: u32,
     pub total_estimated: u32,
@@ -42,6 +51,8 @@ impl ApproveEstimate {
 }
 
 /// Gas estimation for redeem voucher operation
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct RedeemEstimate {
     pub base_cost: u32,
     pub transfers: u32,
@@ -61,6 +72,8 @@ impl RedeemEstimate {
 }
 
 /// Gas estimation for repay operation
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct RepayEstimate {
     pub base_cost: u32,
     pub transfers: u32,
@@ -87,6 +100,8 @@ impl RepayEstimate {
 }
 
 /// Gas estimation for batch repay
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct BatchRepayEstimate {
     pub base_cost: u32,
     pub batch_size: u32,
@@ -100,7 +115,8 @@ impl BatchRepayEstimate {
     pub fn new(batch_size: u32) -> Self {
         let per_item = gas_costs::BATCH_REPAY_OVERHEAD_PER + (2 * gas_costs::TOKEN_TRANSFER_COST);
         let batch_total = gas_costs::BATCH_REPAY_BASE + (batch_size * per_item);
-        let individual_total = batch_size * gas_costs::REPAY_BASE;
+        let individual_total =
+            batch_size * (gas_costs::REPAY_BASE + (2 * gas_costs::TOKEN_TRANSFER_COST));
         let savings = individual_total.saturating_sub(batch_total);
 
         BatchRepayEstimate {
@@ -168,6 +184,7 @@ pub fn validate_batch_repay_gas(
 }
 
 /// Generate performance report for an operation
+#[cfg(test)]
 pub fn generate_performance_report(mut metric: GasMetric) -> String {
     metric.calculate_cost();
     
@@ -212,7 +229,8 @@ mod tests {
     #[test]
     fn test_batch_repay_estimate() {
         let est = BatchRepayEstimate::new(10);
-        let individual = est.batch_size * gas_costs::REPAY_BASE;
+        let individual =
+            est.batch_size * (gas_costs::REPAY_BASE + (2 * gas_costs::TOKEN_TRANSFER_COST));
         assert!(est.total_estimated < individual);
         assert!(est.gas_savings_vs_individual > 0);
     }

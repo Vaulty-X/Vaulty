@@ -5,7 +5,7 @@
 //! - Batch approvals
 //! - Bulk history queries
 
-use soroban_sdk::{Address, BytesN, Env, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 
 use crate::errors::Error;
 use crate::storage::{DataKey, EscrowRecord};
@@ -14,6 +14,7 @@ use crate::events;
 use crate::gas_profiler::gas_costs;
 
 /// Single batch item for a repayment
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct BatchRepayItem {
     pub escrow_id: BytesN<32>,
@@ -22,6 +23,7 @@ pub struct BatchRepayItem {
 }
 
 /// Result of a batch repayment operation
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct BatchRepayResult {
     pub successful_count: u32,

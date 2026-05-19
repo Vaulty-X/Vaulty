@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{Address, Bytes, BytesN, Env, Symbol, Vec};
 use crate::errors::Error;
 use crate::events;
 use crate::storage::{DataKey, MultiSigProposal, PermissionLevel, Role};
@@ -7,7 +7,7 @@ use crate::storage::{DataKey, MultiSigProposal, PermissionLevel, Role};
 pub struct RBAC;
 
 /// Constants for multi-signature requirements
-const MAX_ADMINS: usize = 5;
+const MAX_ADMINS: u32 = 5;
 const PROPOSAL_TIMEOUT_LEDGERS: u32 = 51840; // ~3 days at 6s/ledger
 
 impl RBAC {
@@ -164,9 +164,12 @@ impl RBAC {
             .storage()
             .instance()
             .get(&DataKey::Oracle)
-            .unwrap_or(Address::from_contract_id(&BytesN::from_array(env, &[0; 32])));
+            .unwrap_or_else(|| oracle.clone());
 
         env.storage().instance().set(&DataKey::Oracle, oracle);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserRole(oracle.clone()), &Role::Oracle);
 
         events::oracle_changed(env, &old_oracle, oracle);
         Ok(())
@@ -178,7 +181,7 @@ impl RBAC {
 
         env.storage()
             .persistent()
-            .set(&DataKey::ApprovedVendor(vendor_id), &true);
+            .set(&DataKey::ApprovedVendor(vendor_id.clone()), &true);
 
         events::vendor_approved(env, &vendor_id, caller);
         Ok(())
@@ -190,7 +193,7 @@ impl RBAC {
 
         env.storage()
             .persistent()
-            .set(&DataKey::ApprovedVendor(vendor_id), &false);
+            .set(&DataKey::ApprovedVendor(vendor_id.clone()), &false);
 
         events::vendor_removed(env, &vendor_id, caller);
         Ok(())
@@ -247,7 +250,7 @@ impl RBAC {
     }
 
     /// Get the count of admin addresses
-    fn get_admin_count(env: &Env) -> usize {
+    fn get_admin_count(_env: &Env) -> u32 {
         // This is a simplified implementation - in practice you'd need to iterate through all users
         // For now, we'll assume we track this separately or use a more efficient storage pattern
         1 // Placeholder - would need proper implementation
@@ -263,9 +266,21 @@ impl RBAC {
     ) -> Result<BytesN<32>, Error> {
         Self::require_admin(env, caller)?;
 
-        let proposal_id = env.crypto().sha256(&env.ledger().sequence().to_be_bytes());
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCounter)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &(counter + 1));
+
+        let mut proposal_preimage = Bytes::new(env);
+        proposal_preimage.extend_from_array(&env.ledger().sequence().to_be_bytes());
+        proposal_preimage.extend_from_array(&counter.to_be_bytes());
+        let proposal_id: BytesN<32> = env.crypto().sha256(&proposal_preimage).into();
         let proposal = MultiSigProposal {
-            operation,
+            operation: operation.clone(),
             params,
             proposer: caller.clone(),
             approvals: Vec::new(env),
@@ -276,7 +291,7 @@ impl RBAC {
 
         env.storage()
             .temporary()
-            .set(&DataKey::MultiSigProposal(proposal_id), &proposal);
+            .set(&DataKey::MultiSigProposal(proposal_id.clone()), &proposal);
 
         events::proposal_created(env, &proposal_id, &operation, caller);
         Ok(proposal_id)
@@ -289,7 +304,7 @@ impl RBAC {
         let mut proposal: MultiSigProposal = env
             .storage()
             .temporary()
-            .get(&DataKey::MultiSigProposal(proposal_id))
+            .get(&DataKey::MultiSigProposal(proposal_id.clone()))
             .ok_or(Error::ProposalNotFound)?;
 
         if proposal.executed {
@@ -298,7 +313,7 @@ impl RBAC {
 
         // Check if already approved by this admin
         for approval in proposal.approvals.iter() {
-            if approval == caller {
+            if approval == *caller {
                 return Err(Error::InvalidState);
             }
         }
@@ -306,7 +321,7 @@ impl RBAC {
         proposal.approvals.push_back(caller.clone());
         env.storage()
             .temporary()
-            .set(&DataKey::MultiSigProposal(proposal_id), &proposal);
+            .set(&DataKey::MultiSigProposal(proposal_id.clone()), &proposal);
 
         events::proposal_approved(env, &proposal_id, caller);
         Ok(())
@@ -319,7 +334,7 @@ impl RBAC {
         let mut proposal: MultiSigProposal = env
             .storage()
             .temporary()
-            .get(&DataKey::MultiSigProposal(proposal_id))
+            .get(&DataKey::MultiSigProposal(proposal_id.clone()))
             .ok_or(Error::ProposalNotFound)?;
 
         if proposal.executed {
@@ -352,7 +367,7 @@ impl RBAC {
         proposal.executed = true;
         env.storage()
             .temporary()
-            .set(&DataKey::MultiSigProposal(proposal_id), &proposal);
+            .set(&DataKey::MultiSigProposal(proposal_id.clone()), &proposal);
 
         events::proposal_executed(env, &proposal_id, caller);
 

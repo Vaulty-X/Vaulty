@@ -6,13 +6,14 @@
 //! - Batch operations to reduce per-item costs
 //! - CompactedRepaymentHistory for efficient history tracking
 
-use soroban_sdk::{Address, BytesN, Env, Vec};
+use soroban_sdk::{contracttype, BytesN, Env, Vec};
 
 use crate::storage::{DataKey, RepaymentEntry};
 use crate::errors::Error;
 
 /// Compacted repayment entry using fixed-size fields
 /// Reduces storage compared to full RepaymentEntry through field optimization
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct CompactedRepaymentEntry {
     pub amount: i128,
@@ -32,10 +33,10 @@ impl CompactedRepaymentEntry {
 /// Lazy-loaded repayment history iterator
 /// Loads history in chunks to minimize memory and storage costs
 pub struct LazyRepaymentHistory {
-    chunk_size: usize,
+    chunk_size: u32,
     current_chunk: Vec<RepaymentEntry>,
-    chunk_index: usize,
-    total_entries: usize,
+    chunk_index: u32,
+    total_entries: u32,
 }
 
 impl LazyRepaymentHistory {
@@ -50,13 +51,13 @@ impl LazyRepaymentHistory {
         
         let total_entries = history.len();
         let first_chunk = if total_entries > 0 {
-            load_chunk(env, escrow_id, 0, chunk_size)
+            load_chunk(env, escrow_id, 0, chunk_size as u32)
         } else {
             Vec::new(env)
         };
 
         Ok(LazyRepaymentHistory {
-            chunk_size,
+            chunk_size: chunk_size as u32,
             current_chunk: first_chunk,
             chunk_index: 0,
             total_entries,
@@ -82,7 +83,7 @@ impl LazyRepaymentHistory {
 }
 
 /// Load a specific chunk of repayment history without loading entire history
-fn load_chunk(env: &Env, escrow_id: &BytesN<32>, chunk_index: usize, chunk_size: usize) -> Vec<RepaymentEntry> {
+fn load_chunk(env: &Env, escrow_id: &BytesN<32>, chunk_index: u32, chunk_size: u32) -> Vec<RepaymentEntry> {
     let key = DataKey::RepaymentHistory(escrow_id.clone());
     let history: Vec<RepaymentEntry> = env
         .storage()
@@ -95,7 +96,7 @@ fn load_chunk(env: &Env, escrow_id: &BytesN<32>, chunk_index: usize, chunk_size:
     
     let mut chunk = Vec::new(env);
     for i in start..end {
-        if let Some(entry) = history.get(i as u32) {
+        if let Some(entry) = history.get(i) {
             chunk.push_back(entry);
         }
     }
@@ -117,15 +118,16 @@ pub fn prune_repayment_history(
         .get(&key)
         .unwrap_or_else(|| Vec::new(env));
 
+    let max_entries = max_entries as u32;
     if history.len() <= max_entries {
         return Ok(());
     }
 
     // Keep only the most recent max_entries
-    let start_idx = (history.len() - max_entries) as u32;
+    let start_idx = history.len() - max_entries;
     let mut pruned = Vec::new(env);
     
-    for i in start_idx..(history.len() as u32) {
+    for i in start_idx..history.len() {
         if let Some(entry) = history.get(i) {
             pruned.push_back(entry);
         }
@@ -150,7 +152,7 @@ pub fn get_repayment_summary(
 
     let mut total = 0i128;
     for i in 0..history.len() {
-        if let Some(entry) = history.get(i as u32) {
+        if let Some(entry) = history.get(i) {
             total += entry.amount;
         }
     }
@@ -172,7 +174,7 @@ pub fn batch_append_repayments(
         .unwrap_or_else(|| Vec::new(env));
 
     for i in 0..entries.len() {
-        if let Some(entry) = entries.get(i as u32) {
+        if let Some(entry) = entries.get(i) {
             history.push_back(entry);
         }
     }
@@ -194,12 +196,13 @@ pub fn get_recent_repayments(
         .get(&key)
         .unwrap_or_else(|| Vec::new(env));
 
+    let limit = limit as u32;
     let total_len = history.len();
     let start = if total_len > limit { total_len - limit } else { 0 };
 
     let mut result = Vec::new(env);
     for i in start..total_len {
-        if let Some(entry) = history.get(i as u32) {
+        if let Some(entry) = history.get(i) {
             result.push_back(entry);
         }
     }

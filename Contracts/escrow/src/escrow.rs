@@ -4,12 +4,14 @@ use crate::errors::Error;
 use crate::events;
 use crate::storage::{
     DataKey, EscrowRecord, EscrowState, APPROVAL_TIMEOUT_LEDGERS, DEFAULT_REPAYMENT_FEE_BPS,
-    PROTOCOL_FEE_BPS,
+    PROTOCOL_FEE_BPS, REPAYMENT_WINDOW_LEDGERS,
 };
 use crate::voucher;
 
+const LONG_LIVED_STORAGE_TTL: u32 = REPAYMENT_WINDOW_LEDGERS + APPROVAL_TIMEOUT_LEDGERS + 10_000;
+
 /// Derive a deterministic escrow ID from sender + vendor + season + ledger.
-fn make_escrow_id(env: &Env, sender: &Address, vendor_id: &BytesN<32>, crop_season: &Symbol) -> BytesN<32> {
+fn make_escrow_id(env: &Env, _sender: &Address, vendor_id: &BytesN<32>, _crop_season: &Symbol) -> BytesN<32> {
     let mut preimage = soroban_sdk::Bytes::new(env);
     preimage.extend_from_array(&env.ledger().sequence().to_be_bytes());
     preimage.append(&soroban_sdk::Bytes::from_slice(env, vendor_id.to_array().as_slice()));
@@ -56,6 +58,13 @@ pub fn fund(
     };
 
     env.storage().persistent().set(&DataKey::Escrow(escrow_id.clone()), &record);
+    env.storage()
+        .persistent()
+        .extend_ttl(
+            &DataKey::Escrow(escrow_id.clone()),
+            LONG_LIVED_STORAGE_TTL,
+            LONG_LIVED_STORAGE_TTL,
+        );
     events::escrow_funded(env, &escrow_id, sender, amount);
 
     Ok(escrow_id)
@@ -147,9 +156,11 @@ pub fn trigger_repay(env: &Env, escrow_id: BytesN<32>) -> Result<(), Error> {
         return Err(Error::NotRedeemed);
     }
 
+    let deadline = env.ledger().sequence() + REPAYMENT_WINDOW_LEDGERS;
     record.state = EscrowState::Repaying;
+    record.repay_deadline_ledger = deadline;
     env.storage().persistent().set(&DataKey::Escrow(escrow_id.clone()), &record);
-    events::repay_triggered(env, &escrow_id);
+    events::repay_triggered(env, &escrow_id, deadline);
 
     Ok(())
 }
