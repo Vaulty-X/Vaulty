@@ -3,6 +3,7 @@ import { body } from 'express-validator';
 export const reconciliationValidators = {
   create: [
     body('mobile_money_payment_id')
+    // body('mobile_money_payment_id')
       .isUUID()
       .withMessage('mobile_money_payment_id must be a valid UUID'),
     body('payment_amount')
