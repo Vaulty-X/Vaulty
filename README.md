@@ -86,6 +86,5 @@ Stellar's speed, low transaction costs, and asset tokenization make it well-suit
 
 ## Mission
 
-To help millions build sustainable financial habits by making saving engaging, accessible, and rewarding — while opening a gateway to decentralized financial services. Every deposit strengthens discipline; every streak builds confidence; every saved dollar becomes an opportunity to grow wealth.
-
+To help millions build sustainable financial habits by making saving engaging, accessible, and rewarding — while opening a gateway to decentralized financial services. Every deposit strengthens discipline; every streak builds confidence; every saved dollar becomes an opportunity to grow wealth
 ---
